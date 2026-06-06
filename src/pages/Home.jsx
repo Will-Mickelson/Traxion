@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { getUserStats, getRecentSessions, getSuggestedWorkout } from '../db'
 import { Zap, Flame, Target, ChevronRight } from 'lucide-react'
 
-export default function Home({ user, onStartWorkout }) {
+export default function Home({ user, onStartWorkout, customSuggestions }) {
   const [stats, setStats] = useState(null)
   const [recent, setRecent] = useState([])
   const [suggested, setSuggested] = useState(null)
@@ -13,7 +13,12 @@ export default function Home({ user, onStartWorkout }) {
     getRecentSessions(user.id, 5).then(setRecent)
     const paths = user.activePaths || ['gym']
     const path = paths[new Date().getDay() % paths.length]
-    getSuggestedWorkout(user.id, path).then(setSuggested)
+    if (customSuggestions?.length) {
+      const match = customSuggestions.find(s => s.path === path) || customSuggestions[0]
+      setSuggested(match)
+    } else {
+      getSuggestedWorkout(user.id, path).then(setSuggested)
+    }
   }, [user])
 
   if (!user) return null

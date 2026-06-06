@@ -1,27 +1,49 @@
 import Dexie from 'dexie'
 
+function getXPMultiplier(streak) {
+  if (streak >= 30) return 2.0
+  if (streak >= 14) return 1.75
+  if (streak >= 7)  return 1.5
+  if (streak >= 3)  return 1.25
+  return 1.0
+}
+
 export const db = new Dexie('traxion')
 
 db.version(1).stores({
-  user:            '++id, name',
-  workoutSessions: '++id, userId, sportPath, date',
-  sessionExercises:'++id, sessionId, exerciseId',
-  exercises:       '++id, name, sportPath, type',
-  nutritionLogs:   '++id, userId, date',
-  badges:          '++id, userId, name',
-  userStats:       '++id, userId',
+  user: '++id, name', workoutSessions: '++id, userId, sportPath, date',
+  sessionExercises: '++id, sessionId, exerciseId', exercises: '++id, name, sportPath, type',
+  nutritionLogs: '++id, userId, date', badges: '++id, userId, name',
+  userStats: '++id, userId',
+})
+db.version(2).stores({
+  user: '++id, name', workoutSessions: '++id, userId, sportPath, date',
+  sessionExercises: '++id, sessionId, exerciseId', exercises: '++id, name, sportPath, type',
+  nutritionLogs: '++id, userId, date', badges: '++id, userId, name',
+  userStats: '++id, userId', personalRecords: '++id, userId, exerciseName',
+  customExercises: '++id, userId, sportPath',
+})
+db.version(3).stores({
+  user: '++id, name', workoutSessions: '++id, userId, sportPath, date',
+  sessionExercises: '++id, sessionId, exerciseId', exercises: '++id, name, sportPath, type',
+  nutritionLogs: '++id, userId, date', badges: '++id, userId, name',
+  userStats: '++id, userId', personalRecords: '++id, userId, exerciseName',
+  customExercises: '++id, userId, sportPath',
+}).upgrade(tx => {
+  return tx.table('user').toCollection().modify(u => {
+    if (!u.units) u.units = 'imperial'
+    if (!u.heightCm) u.heightCm = null
+  })
 })
 
-db.version(2).stores({
-  user:            '++id, name',
-  workoutSessions: '++id, userId, sportPath, date',
-  sessionExercises:'++id, sessionId, exerciseId',
-  exercises:       '++id, name, sportPath, type',
-  nutritionLogs:   '++id, userId, date',
-  badges:          '++id, userId, name',
-  userStats:       '++id, userId',
-  personalRecords: '++id, userId, exerciseName',
+db.version(4).stores({
+  user: '++id, name', workoutSessions: '++id, userId, sportPath, date',
+  sessionExercises: '++id, sessionId, exerciseId', exercises: '++id, name, sportPath, type',
+  nutritionLogs: '++id, userId, date', badges: '++id, userId, name',
+  userStats: '++id, userId', personalRecords: '++id, userId, exerciseName',
   customExercises: '++id, userId, sportPath',
+  coachProfiles: '++id, userId',
+  customSuggestions: 'userId',
 })
 
 export async function getOrCreateUser() {
@@ -33,6 +55,16 @@ export async function createUser(data) {
   const id = await db.user.add({ ...data, totalXP: 0, currentStreak: 0, lastWorkoutDate: null, createdAt: new Date() })
   await db.userStats.add({ userId: id, gymLevel: 1, basketballLevel: 1, runningLevel: 1, bodyWeightKg: data.bodyWeightKg || null, weeklyGoalDays: data.weeklyGoalDays || 4 })
   return id
+}
+
+export async function updateUserUnits(userId, units, heightCm, bodyWeightKg) {
+  const update = { units }
+  if (heightCm !== undefined) update.heightCm = heightCm
+  await db.user.update(userId, update)
+  if (bodyWeightKg !== undefined) {
+    const stats = await db.userStats.where('userId').equals(userId).first()
+    if (stats) await db.userStats.update(stats.id, { bodyWeightKg })
+  }
 }
 
 export async function checkAndUpdatePR(userId, exerciseName, weight, reps) {
@@ -56,7 +88,6 @@ export async function saveWorkoutSession(session, exercises) {
   let newPRs = []
   for (const ex of exercises) {
     await db.sessionExercises.add({ ...ex, sessionId })
-    // Check PRs for strength exercises
     for (const set of (ex.sets || [])) {
       if (set.weight && parseFloat(set.weight) > 0) {
         const isPR = await checkAndUpdatePR(session.userId, ex.name, set.weight, set.reps)
@@ -64,15 +95,12 @@ export async function saveWorkoutSession(session, exercises) {
       }
     }
   }
-  const xp = calcXP(session, exercises, newPRs.length)
   const user = await db.user.get(session.userId)
+  const multiplier = getXPMultiplier(user.currentStreak || 0)
+  const xp = Math.round(calcXP(session, exercises, newPRs.length) * multiplier)
   const newStreak = await calcStreak(session.userId)
-  await db.user.update(session.userId, {
-    totalXP: (user.totalXP || 0) + xp,
-    lastWorkoutDate: new Date(),
-    currentStreak: newStreak
-  })
-  return { sessionId, xp, newPRs }
+  await db.user.update(session.userId, { totalXP: (user.totalXP || 0) + xp, lastWorkoutDate: new Date(), currentStreak: newStreak })
+  return { sessionId, xp, newPRs, multiplier }
 }
 
 function calcXP(session, exercises, prCount) {
@@ -87,12 +115,6 @@ async function calcStreak(userId) {
   const sessions = await db.workoutSessions.where('userId').equals(userId).sortBy('date')
   if (!sessions.length) return 1
   let streak = 1
-  const today = new Date().toDateString()
-  const lastDate = new Date(sessions[sessions.length - 1].date).toDateString()
-  if (lastDate !== today) {
-    const diff = (new Date() - new Date(sessions[sessions.length - 1].date)) / 86400000
-    if (diff > 2) return 1
-  }
   for (let i = sessions.length - 1; i > 0; i--) {
     const diff = (new Date(sessions[i].date) - new Date(sessions[i-1].date)) / 86400000
     if (diff <= 2) streak++
@@ -121,7 +143,6 @@ export async function getSuggestedWorkout(userId, path) {
   const options = SUGGESTED_WORKOUTS[path] || SUGGESTED_WORKOUTS.gym
   const recent = await getRecentSessions(userId, 5)
   const recentNames = recent.map(s => s.name)
-  // Prefer a workout not done recently
   const fresh = options.filter(w => !recentNames.includes(w.name))
   const pool = fresh.length > 0 ? fresh : options
   return { path, ...pool[new Date().getDate() % pool.length] }
@@ -175,240 +196,30 @@ export const EXERCISES = {
 }
 
 export const BASKETBALL_DRILLS = {
-  'Suicide Sprints': {
-    difficulty: 'intermediate',
-    description: 'Full-court sprint conditioning drill used at every level of basketball.',
-    instructions: [
-      'Start at the baseline. Sprint to the near free-throw line and back.',
-      'Sprint to half court and back.',
-      'Sprint to the far free-throw line and back.',
-      'Sprint to the far baseline and back. That\'s one rep.'
-    ],
-    setsReps: '4–6 reps, 60–90 sec rest between',
-    cues: ['Drive your arms to push your legs', 'Touch the line with your hand on each turn', 'Stay low on direction changes'],
-    beginner: 'Walk the first two lines, jog the last two until your conditioning improves.'
-  },
-  'Box Jumps': {
-    difficulty: 'beginner',
-    description: 'Explosive lower-body power exercise that directly improves your vertical.',
-    instructions: [
-      'Stand in front of a sturdy box or platform (12–24 inches high).',
-      'Bend your knees and swing your arms back.',
-      'Explode upward, swinging arms forward, and land softly on top of the box.',
-      'Stand fully upright on top, then step down carefully — don\'t jump down.'
-    ],
-    setsReps: '3 sets of 8–10 reps, 90 sec rest',
-    cues: ['Land with soft knees, never stiff legs', 'Full hip extension at the top', 'Reset fully before each jump'],
-    beginner: 'Start with a low step or just practice the jump-and-land motion on flat ground first.'
-  },
-  'Defensive Slides': {
-    difficulty: 'beginner',
-    description: 'The most fundamental defensive footwork in basketball. Every coach drills this.',
-    instructions: [
-      'Get in a defensive stance: feet shoulder-width apart, knees bent, hips low, hands out.',
-      'Push off your outside foot to slide laterally — never cross your feet.',
-      'Keep your hips below your shoulders the entire time.',
-      'Slide to one cone, touch it, then slide back.'
-    ],
-    setsReps: '4 sets of 30 seconds, 30 sec rest',
-    cues: ['Stay low — if your head bobs up and down, your hips are rising', 'Push, don\'t step', 'Keep hands active and wide'],
-    beginner: 'Practice in front of a mirror first to check your depth. Comfort before speed.'
-  },
-  'Free Throw Practice': {
-    difficulty: 'beginner',
-    description: 'The most valuable shot in basketball. Consistent routine = consistent results.',
-    instructions: [
-      'Step to the line. Place your shooting foot slightly forward.',
-      'Bend your knees slightly and find a consistent pre-shot routine (bounce, breath, etc.).',
-      'Hold the ball with your shooting hand under, guide hand on the side.',
-      'Extend your legs, elbow, and wrist together in one smooth motion. Follow through — hold your finish.'
-    ],
-    setsReps: '50–100 makes (not attempts) per session',
-    cues: ['Same routine every single shot', 'Elbow under the ball, not flared out', 'Hold your follow-through until the ball hits the net'],
-    beginner: 'Shoot from 2–3 feet closer first until your form is consistent. Distance comes later.'
-  },
-  'Ball Handling Drills': {
-    difficulty: 'beginner',
-    description: 'Dribbling confidence is built with repetition. Start slow, go fast.',
-    instructions: [
-      'Stationary: dribble low and hard with your right hand for 30 seconds, then left.',
-      'Figure 8: weave the ball through your legs in a figure-8 pattern.',
-      'Two-ball dribble: dribble both balls simultaneously, then alternate.',
-      'Spider dribble: tap ball around your feet rapidly with both hands.'
-    ],
-    setsReps: '10 min total, cycle through each drill',
-    cues: ['Look up, not at the ball — pick a spot on the wall', 'Dribble below knee height', 'Weak hand gets equal time'],
-    beginner: 'Eyes on the ball is fine at first. As it gets automatic, force yourself to look away.'
-  },
-  'Cone Drills': {
-    difficulty: 'intermediate',
-    description: 'Agility and change-of-direction speed. Essential for beating defenders.',
-    instructions: [
-      'Set up 5 cones in a straight line, 3 feet apart.',
-      'Weave through the cones as fast as possible without knocking them over.',
-      'Return weaving back through.',
-      'Variation: T-drill — sprint forward, shuffle left, shuffle right, backpedal back.'
-    ],
-    setsReps: '6–8 runs, full rest between',
-    cues: ['Plant hard on outside foot to change direction', 'Stay low through the whole drill', 'Speed comes after consistency'],
-    beginner: 'Walk through the pattern first so your feet know the path, then add speed.'
-  },
-  'Mikan Drill': {
-    difficulty: 'beginner',
-    description: 'The classic finishing drill. Builds touch and coordination around the basket.',
-    instructions: [
-      'Start under the basket on one side.',
-      'Lay the ball in off the backboard with your right hand.',
-      'Without letting the ball hit the floor, catch and lay it in from the left side.',
-      'Alternate continuously for the full set.'
-    ],
-    setsReps: '3 sets of 20 makes (10 each side)',
-    cues: ['Use the backboard every time', 'High off the glass, not flat', 'Rhythm is more important than speed'],
-    beginner: 'Let the ball bounce at first if you need to. Work up to the continuous version.'
-  },
-  'Spot Shooting': {
-    difficulty: 'beginner',
-    description: 'Develop a repeatable shot from 5 key spots on the floor.',
-    instructions: [
-      'Pick 5 spots: both corners, both wings, and top of the key.',
-      'Take 10 shots from each spot.',
-      'Track your makes at each spot.',
-      'Move to the next spot only after completing your attempts.'
-    ],
-    setsReps: '50 shots total (10 per spot), track makes',
-    cues: ['Set your feet before you catch the ball', 'Same release point every time', 'Follow through and hold it'],
-    beginner: 'Start closer than the three-point line. Form > distance always.'
-  },
-  'Layup Lines': {
-    difficulty: 'beginner',
-    description: 'The most basic and most missed shot in basketball. Master it.',
-    instructions: [
-      'Dribble from half court at game speed toward the basket.',
-      'Take off on your inside foot (right layup = left foot takeoff).',
-      'Aim for the top corner of the box on the backboard.',
-      'Alternate sides each rep.'
-    ],
-    setsReps: '20 makes each side',
-    cues: ['Two-step footwork: big step then small step into the jump', 'Use the glass', 'Go game speed — don\'t slow down at the end'],
-    beginner: 'Walk through the footwork first: step-step-jump. Get the pattern before adding the dribble.'
-  },
-  'Jump Rope': {
-    difficulty: 'beginner',
-    description: 'Underrated conditioning tool. Builds footwork, timing, and cardio.',
-    instructions: [
-      'Basic: two-foot jumps, steady pace for 1 minute.',
-      'Alternate foot: hop left-right alternating like running in place.',
-      'High knees: drive knees up while jumping.',
-      'Double under: swing rope twice per jump (advanced).'
-    ],
-    setsReps: '5 rounds of 1 minute, 30 sec rest',
-    cues: ['Jump on the balls of your feet, not flat-footed', 'Small jumps — just enough to clear the rope', 'Wrists do the work, not arms'],
-    beginner: 'Just focus on basic two-foot jumps at a steady pace. Consistency over tricks.'
-  },
-  'Vertical Jumps': {
-    difficulty: 'beginner',
-    description: 'Train the exact motion you use to rebound, block shots, and finish at the rim.',
-    instructions: [
-      'Stand flat-footed. Swing arms back and drop into quarter squat.',
-      'Explode upward swinging arms overhead — reach as high as possible.',
-      'Land softly on both feet, absorbing with your knees.',
-      'Reset fully — quality over speed.'
-    ],
-    setsReps: '4 sets of 6 reps, 2 min rest',
-    cues: ['Full arm swing adds 2–3 inches', 'Land quiet — if it\'s loud, you\'re not absorbing', 'Max effort every single rep'],
-    beginner: 'Focus on the landing first. Soft, balanced landings protect your knees.'
-  },
-  'Lateral Bound': {
-    difficulty: 'intermediate',
-    description: 'Single-leg lateral power. Mimics the cut-and-drive motion in basketball.',
-    instructions: [
-      'Stand on your right foot.',
-      'Push off laterally and land on your left foot, sticking the landing.',
-      'Hold for 2 seconds, then bound back.',
-      'Keep the movement explosive — not a shuffle, a bound.'
-    ],
-    setsReps: '3 sets of 8 each side, 90 sec rest',
-    cues: ['Stick each landing — don\'t let your knee cave in', 'Drive off your whole foot', 'Increase distance as you get stronger'],
-    beginner: 'Start with small hops close together. Focus on the single-leg landing stability first.'
-  },
-  'Reaction Drills': {
-    difficulty: 'intermediate',
-    description: 'Train your first-step quickness and decision speed.',
-    instructions: [
-      'Stand in an athletic stance facing a wall or partner.',
-      'On a visual or audio cue, sprint 5 yards in the called direction.',
-      'Return to center and reset.',
-      'Variation: shuffle left on left signal, shuffle right on right, sprint on forward signal.'
-    ],
-    setsReps: '10–15 reps, keep rest short (20–30 sec)',
-    cues: ['First step is everything — explode, don\'t ease', 'Stay ready: bent knees, weight forward', 'React, don\'t anticipate'],
-    beginner: 'Use simple left/right signals first. Add forward/back once the pattern is automatic.'
-  },
-  'Drop Step Post Move': {
-    difficulty: 'intermediate',
-    description: 'A foundational low-post move for finishing with your back to the basket.',
-    instructions: [
-      'Catch the ball in the low post. Feel where the defender is with your back.',
-      'If defender is on your right, drop your right foot back and around them.',
-      'Pivot on your left foot and take one power dribble toward the basket.',
-      'Finish with a power layup or short bank shot.'
-    ],
-    setsReps: '3 sets of 10 each side',
-    cues: ['Drop the foot BEHIND the defender, not to the side', 'Keep the ball protected and low', 'Attack the rim, not the backboard'],
-    beginner: 'Drill the footwork without a ball first — drop step, pivot, step. Add the ball once it\'s automatic.'
-  },
-  'Chair Drill Dribbling': {
-    difficulty: 'beginner',
-    description: 'Simulates dribbling around a defender using chairs as obstacles.',
-    instructions: [
-      'Set up 3–4 chairs in a line spaced 4 feet apart.',
-      'Dribble through the chairs using crossovers and between-the-legs moves.',
-      'Keep your head up — stare at a spot on the wall, not the ball.',
-      'Come back through using your weak hand only.'
-    ],
-    setsReps: '4 runs each direction, 2 min total',
-    cues: ['Protect the ball with your body when going around a chair', 'Low dribble through the obstacles', 'Game speed on the last two runs'],
-    beginner: 'Walk-through at slow speed first so your hands learn the pattern. Speed comes with reps.'
-  }
+  'Suicide Sprints': { difficulty: 'intermediate', description: 'Full-court sprint conditioning drill used at every level of basketball.', instructions: ['Start at the baseline. Sprint to the near free-throw line and back.', 'Sprint to half court and back.', 'Sprint to the far free-throw line and back.', "Sprint to the far baseline and back. That's one rep."], setsReps: '4–6 reps, 60–90 sec rest between', cues: ['Drive your arms to push your legs', 'Touch the line with your hand on each turn', 'Stay low on direction changes'], beginner: 'Walk the first two lines, jog the last two until your conditioning improves.' },
+  'Box Jumps': { difficulty: 'beginner', description: 'Explosive lower-body power exercise that directly improves your vertical.', instructions: ['Stand in front of a sturdy box or platform (12–24 inches high).', 'Bend your knees and swing your arms back.', 'Explode upward, swinging arms forward, and land softly on top of the box.', "Stand fully upright on top, then step down carefully — don't jump down."], setsReps: '3 sets of 8–10 reps, 90 sec rest', cues: ['Land with soft knees, never stiff legs', 'Full hip extension at the top', 'Reset fully before each jump'], beginner: 'Start with a low step or just practice the jump-and-land motion on flat ground first.' },
+  'Defensive Slides': { difficulty: 'beginner', description: 'The most fundamental defensive footwork in basketball. Every coach drills this.', instructions: ['Get in a defensive stance: feet shoulder-width apart, knees bent, hips low, hands out.', "Push off your outside foot to slide laterally — never cross your feet.", 'Keep your hips below your shoulders the entire time.', 'Slide to one cone, touch it, then slide back.'], setsReps: '4 sets of 30 seconds, 30 sec rest', cues: ["Stay low — if your head bobs up and down, your hips are rising", "Push, don't step", 'Keep hands active and wide'], beginner: 'Practice in front of a mirror first to check your depth. Comfort before speed.' },
+  'Free Throw Practice': { difficulty: 'beginner', description: 'The most valuable shot in basketball. Consistent routine = consistent results.', instructions: ['Step to the line. Place your shooting foot slightly forward.', 'Bend your knees slightly and find a consistent pre-shot routine (bounce, breath, etc.).', 'Hold the ball with your shooting hand under, guide hand on the side.', 'Extend your legs, elbow, and wrist together in one smooth motion. Follow through — hold your finish.'], setsReps: '50–100 makes (not attempts) per session', cues: ['Same routine every single shot', 'Elbow under the ball, not flared out', 'Hold your follow-through until the ball hits the net'], beginner: 'Shoot from 2–3 feet closer first until your form is consistent. Distance comes later.' },
+  'Ball Handling Drills': { difficulty: 'beginner', description: 'Dribbling confidence is built with repetition. Start slow, go fast.', instructions: ['Stationary: dribble low and hard with your right hand for 30 seconds, then left.', 'Figure 8: weave the ball through your legs in a figure-8 pattern.', 'Two-ball dribble: dribble both balls simultaneously, then alternate.', 'Spider dribble: tap ball around your feet rapidly with both hands.'], setsReps: '10 min total, cycle through each drill', cues: ['Look up, not at the ball — pick a spot on the wall', 'Dribble below knee height', 'Weak hand gets equal time'], beginner: 'Eyes on the ball is fine at first. As it gets automatic, force yourself to look away.' },
+  'Cone Drills': { difficulty: 'intermediate', description: 'Agility and change-of-direction speed. Essential for beating defenders.', instructions: ['Set up 5 cones in a straight line, 3 feet apart.', 'Weave through the cones as fast as possible without knocking them over.', 'Return weaving back through.', 'Variation: T-drill — sprint forward, shuffle left, shuffle right, backpedal back.'], setsReps: '6–8 runs, full rest between', cues: ['Plant hard on outside foot to change direction', 'Stay low through the whole drill', 'Speed comes after consistency'], beginner: 'Walk through the pattern first so your feet know the path, then add speed.' },
+  'Mikan Drill': { difficulty: 'beginner', description: 'The classic finishing drill. Builds touch and coordination around the basket.', instructions: ['Start under the basket on one side.', 'Lay the ball in off the backboard with your right hand.', "Without letting the ball hit the floor, catch and lay it in from the left side.", 'Alternate continuously for the full set.'], setsReps: '3 sets of 20 makes (10 each side)', cues: ['Use the backboard every time', 'High off the glass, not flat', 'Rhythm is more important than speed'], beginner: 'Let the ball bounce at first if you need to. Work up to the continuous version.' },
+  'Spot Shooting': { difficulty: 'beginner', description: 'Develop a repeatable shot from 5 key spots on the floor.', instructions: ['Pick 5 spots: both corners, both wings, and top of the key.', 'Take 10 shots from each spot.', 'Track your makes at each spot.', 'Move to the next spot only after completing your attempts.'], setsReps: '50 shots total (10 per spot), track makes', cues: ['Set your feet before you catch the ball', 'Same release point every time', 'Follow through and hold it'], beginner: 'Start closer than the three-point line. Form > distance always.' },
+  'Layup Lines': { difficulty: 'beginner', description: 'The most basic and most missed shot in basketball. Master it.', instructions: ['Dribble from half court at game speed toward the basket.', 'Take off on your inside foot (right layup = left foot takeoff).', 'Aim for the top corner of the box on the backboard.', 'Alternate sides each rep.'], setsReps: '20 makes each side', cues: ["Two-step footwork: big step then small step into the jump", 'Use the glass', "Go game speed — don't slow down at the end"], beginner: 'Walk through the footwork first: step-step-jump. Get the pattern before adding the dribble.' },
+  'Jump Rope': { difficulty: 'beginner', description: 'Underrated conditioning tool. Builds footwork, timing, and cardio.', instructions: ['Basic: two-foot jumps, steady pace for 1 minute.', 'Alternate foot: hop left-right alternating like running in place.', 'High knees: drive knees up while jumping.', 'Double under: swing rope twice per jump (advanced).'], setsReps: '5 rounds of 1 minute, 30 sec rest', cues: ["Jump on the balls of your feet, not flat-footed", "Small jumps — just enough to clear the rope", "Wrists do the work, not arms"], beginner: 'Just focus on basic two-foot jumps at a steady pace. Consistency over tricks.' },
+  'Vertical Jumps': { difficulty: 'beginner', description: 'Train the exact motion you use to rebound, block shots, and finish at the rim.', instructions: ['Stand flat-footed. Swing arms back and drop into quarter squat.', 'Explode upward swinging arms overhead — reach as high as possible.', 'Land softly on both feet, absorbing with your knees.', 'Reset fully — quality over speed.'], setsReps: '4 sets of 6 reps, 2 min rest', cues: ['Full arm swing adds 2–3 inches', "Land quiet — if it's loud, you're not absorbing", 'Max effort every single rep'], beginner: 'Focus on the landing first. Soft, balanced landings protect your knees.' },
+  'Lateral Bound': { difficulty: 'intermediate', description: 'Single-leg lateral power. Mimics the cut-and-drive motion in basketball.', instructions: ['Stand on your right foot.', 'Push off laterally and land on your left foot, sticking the landing.', 'Hold for 2 seconds, then bound back.', "Keep the movement explosive — not a shuffle, a bound."], setsReps: '3 sets of 8 each side, 90 sec rest', cues: ["Stick each landing — don't let your knee cave in", 'Drive off your whole foot', 'Increase distance as you get stronger'], beginner: 'Start with small hops close together. Focus on the single-leg landing stability first.' },
+  'Reaction Drills': { difficulty: 'intermediate', description: 'Train your first-step quickness and decision speed.', instructions: ['Stand in an athletic stance facing a wall or partner.', 'On a visual or audio cue, sprint 5 yards in the called direction.', 'Return to center and reset.', 'Variation: shuffle left on left signal, shuffle right on right, sprint on forward signal.'], setsReps: '10–15 reps, keep rest short (20–30 sec)', cues: ["First step is everything — explode, don't ease", "Stay ready: bent knees, weight forward", "React, don't anticipate"], beginner: 'Use simple left/right signals first. Add forward/back once the pattern is automatic.' },
+  'Drop Step Post Move': { difficulty: 'intermediate', description: 'A foundational low-post move for finishing with your back to the basket.', instructions: ['Catch the ball in the low post. Feel where the defender is with your back.', 'If defender is on your right, drop your right foot back and around them.', 'Pivot on your left foot and take one power dribble toward the basket.', 'Finish with a power layup or short bank shot.'], setsReps: '3 sets of 10 each side', cues: ['Drop the foot BEHIND the defender, not to the side', 'Keep the ball protected and low', 'Attack the rim, not the backboard'], beginner: 'Drill the footwork without a ball first — drop step, pivot, step. Add the ball once automatic.' },
+  'Chair Drill Dribbling': { difficulty: 'beginner', description: 'Simulates dribbling around a defender using chairs as obstacles.', instructions: ['Set up 3–4 chairs in a line spaced 4 feet apart.', 'Dribble through the chairs using crossovers and between-the-legs moves.', 'Keep your head up — stare at a spot on the wall, not the ball.', 'Come back through using your weak hand only.'], setsReps: '4 runs each direction, 2 min total', cues: ['Protect the ball with your body when going around a chair', 'Low dribble through the obstacles', 'Game speed on the last two runs'], beginner: 'Walk-through at slow speed first so your hands learn the pattern. Speed comes with reps.' },
 }
 
 export const BEGINNER_BASKETBALL_PROGRAM = [
-  {
-    week: 1, day: 1, name: 'Foundation Day 1',
-    focus: 'Ball handling + footwork basics',
-    exercises: ['Ball Handling Drills', 'Layup Lines', 'Defensive Slides'],
-    note: 'Take your time. These are the three skills that separate beginners from intermediate players.'
-  },
-  {
-    week: 1, day: 2, name: 'Foundation Day 2',
-    focus: 'Shooting fundamentals',
-    exercises: ['Free Throw Practice', 'Spot Shooting', 'Jump Rope'],
-    note: 'Film yourself shooting if you can. Seeing your form is the fastest way to fix it.'
-  },
-  {
-    week: 1, day: 3, name: 'Foundation Day 3',
-    focus: 'Conditioning + finishing',
-    exercises: ['Jump Rope', 'Mikan Drill', 'Layup Lines'],
-    note: 'The Mikan Drill is hard at first. Don\'t worry about speed — get the rhythm.'
-  },
-  {
-    week: 2, day: 1, name: 'Power + Handles',
-    focus: 'Explosiveness and ball control',
-    exercises: ['Box Jumps', 'Chair Drill Dribbling', 'Ball Handling Drills'],
-    note: 'Box jumps will feel intense. Take full rest between sets.'
-  },
-  {
-    week: 2, day: 2, name: 'Court Movement',
-    focus: 'Defense and agility',
-    exercises: ['Defensive Slides', 'Cone Drills', 'Reaction Drills'],
-    note: 'Defense wins games. This session builds the habits that coaches look for first.'
-  },
-  {
-    week: 2, day: 3, name: 'Game Skills',
-    focus: 'Shooting and post play',
-    exercises: ['Spot Shooting', 'Free Throw Practice', 'Drop Step Post Move'],
-    note: 'Post moves take weeks to feel natural. Just start learning the footwork today.'
-  },
+  { week: 1, day: 1, name: 'Foundation Day 1', focus: 'Ball handling + footwork basics', exercises: ['Ball Handling Drills', 'Layup Lines', 'Defensive Slides'], note: "Take your time. These are the three skills that separate beginners from intermediate players." },
+  { week: 1, day: 2, name: 'Foundation Day 2', focus: 'Shooting fundamentals', exercises: ['Free Throw Practice', 'Spot Shooting', 'Jump Rope'], note: 'Film yourself shooting if you can. Seeing your form is the fastest way to fix it.' },
+  { week: 1, day: 3, name: 'Foundation Day 3', focus: 'Conditioning + finishing', exercises: ['Jump Rope', 'Mikan Drill', 'Layup Lines'], note: "The Mikan Drill is hard at first. Don't worry about speed — get the rhythm." },
+  { week: 2, day: 1, name: 'Power + Handles', focus: 'Explosiveness and ball control', exercises: ['Box Jumps', 'Chair Drill Dribbling', 'Ball Handling Drills'], note: 'Box jumps will feel intense. Take full rest between sets.' },
+  { week: 2, day: 2, name: 'Court Movement', focus: 'Defense and agility', exercises: ['Defensive Slides', 'Cone Drills', 'Reaction Drills'], note: 'Defense wins games. This session builds the habits that coaches look for first.' },
+  { week: 2, day: 3, name: 'Game Skills', focus: 'Shooting and post play', exercises: ['Spot Shooting', 'Free Throw Practice', 'Drop Step Post Move'], note: 'Post moves take weeks to feel natural. Just start learning the footwork today.' },
 ]
 
 export const SUGGESTED_WORKOUTS = {
