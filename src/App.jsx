@@ -6,29 +6,27 @@ import Workout from './pages/Workout'
 import Nutrition from './pages/Nutrition'
 import Progress from './pages/Progress'
 import Profile from './pages/Profile'
+import BasketballProgram from './pages/BasketballProgram'
 import BottomNav from './components/BottomNav'
 
 export default function App() {
   const [user, setUser] = useState(undefined)
   const [tab, setTab] = useState('home')
   const [prefillWorkout, setPrefillWorkout] = useState(null)
+  const [showBBProgram, setShowBBProgram] = useState(false)
 
-  useEffect(() => {
-    getOrCreateUser().then(setUser)
-  }, [])
+  useEffect(() => { getOrCreateUser().then(setUser) }, [])
 
   const handleOnboardingComplete = async (userId) => {
     const u = await db.user.get(userId)
     setUser(u)
   }
 
-  const handleReset = () => {
-    setUser(null)
-    setTimeout(() => setUser(undefined), 100)
-  }
+  const handleReset = () => { setUser(null); setTimeout(() => setUser(undefined), 100) }
 
   const startWorkout = (suggested) => {
     setPrefillWorkout(suggested)
+    setShowBBProgram(false)
     setTab('workout')
   }
 
@@ -44,8 +42,9 @@ export default function App() {
 
   return (
     <div>
+      {showBBProgram && <BasketballProgram onStartWorkout={startWorkout} onClose={() => setShowBBProgram(false)} />}
       {tab === 'home' && <Home user={user} onStartWorkout={startWorkout} />}
-      {tab === 'workout' && <Workout user={user} prefill={prefillWorkout} onSaved={handleWorkoutSaved} />}
+      {tab === 'workout' && <Workout user={user} prefill={prefillWorkout} onSaved={handleWorkoutSaved} onOpenProgram={() => setShowBBProgram(true)} />}
       {tab === 'nutrition' && <Nutrition user={user} />}
       {tab === 'progress' && <Progress user={user} />}
       {tab === 'profile' && <Profile user={user} onReset={handleReset} />}

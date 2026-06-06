@@ -1,53 +1,57 @@
-import { useState } from 'react'
-import { saveWorkoutSession, EXERCISES, SUGGESTED_WORKOUTS } from '../db'
-import { Plus, Trash2, ChevronDown, CheckCircle } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { saveWorkoutSession, EXERCISES, SUGGESTED_WORKOUTS, BASKETBALL_DRILLS, getCustomExercises } from '../db'
+import { Plus, Trash2, CheckCircle, BookOpen } from 'lucide-react'
+import AddExerciseModal from '../components/AddExerciseModal'
+import PRToast from '../components/PRToast'
 
 const PATHS = ['gym', 'basketball', 'running']
 const PATH_LABELS = { gym: '🏋️ Gym', basketball: '🏀 Basketball', running: '🏃 Running' }
 
-export default function Workout({ user, prefill, onSaved }) {
+export default function Workout({ user, prefill, onSaved, onOpenProgram }) {
   const [path, setPath] = useState(prefill?.path || (user?.activePaths?.[0] || 'gym'))
-  const [exercises, setExercises] = useState(prefill ? prefill.exercises.map(name => mkExercise(name, path)) : [])
+  const [exercises, setExercises] = useState(prefill ? prefill.exercises.map(name => mkExercise(name, prefill.path || path)) : [])
   const [startTime] = useState(Date.now())
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [notes, setNotes] = useState('')
   const [showPicker, setShowPicker] = useState(false)
+  const [showAddModal, setShowAddModal] = useState(false)
+  const [customExercises, setCustomExercises] = useState([])
+  const [newPRs, setNewPRs] = useState([])
+  const [selectedDrillInfo, setSelectedDrillInfo] = useState(null)
 
-  const availableEx = EXERCISES[path] || []
+  useEffect(() => {
+    if (user) getCustomExercises(user.id).then(setCustomExercises)
+  }, [user])
 
   function mkExercise(name, p) {
-    const def = (EXERCISES[p] || []).find(e => e.name === name)
+    const def = [...(EXERCISES[p] || []), ...customExercises].find(e => e.name === name)
     return { name, type: def?.type || 'strength', sets: [{ reps: '', weight: '', distance: '', pace: '' }] }
   }
 
-  const addExercise = (name) => {
-    setExercises(e => [...e, mkExercise(name, path)])
-    setShowPicker(false)
-  }
+  const allExercises = [...(EXERCISES[path] || []), ...customExercises.filter(e => e.sportPath === path)]
 
+  const addExercise = (name) => { setExercises(e => [...e, mkExercise(name, path)]); setShowPicker(false) }
   const removeExercise = (i) => setExercises(e => e.filter((_, idx) => idx !== i))
-
   const addSet = (exIdx) => setExercises(e => e.map((ex, i) => i === exIdx ? { ...ex, sets: [...ex.sets, { reps: '', weight: '', distance: '', pace: '' }] } : ex))
   const removeSet = (exIdx, setIdx) => setExercises(e => e.map((ex, i) => i === exIdx ? { ...ex, sets: ex.sets.filter((_, si) => si !== setIdx) } : ex))
-
-  const updateSet = (exIdx, setIdx, field, val) => setExercises(e => e.map((ex, i) => i === exIdx ? {
-    ...ex, sets: ex.sets.map((s, si) => si === setIdx ? { ...s, [field]: val } : s)
-  } : ex))
+  const updateSet = (exIdx, setIdx, field, val) => setExercises(e => e.map((ex, i) => i === exIdx ? { ...ex, sets: ex.sets.map((s, si) => si === setIdx ? { ...s, [field]: val } : s) } : ex))
 
   const handleSave = async () => {
     if (!exercises.length) return
     setSaving(true)
-    const durationMins = Math.round((Date.now() - startTime) / 60000)
+    const durationMins = Math.round((Date.now() - startTime) / 60000) || 1
     const session = { userId: user.id, sportPath: path, name: prefill?.name || path, date: new Date(), durationMins, notes, xpEarned: 0 }
     const exData = exercises.map(ex => ({ exerciseId: ex.name, name: ex.name, sets: ex.sets }))
-    const { xp } = await saveWorkoutSession(session, exData)
+    const { xp, newPRs: prs } = await saveWorkoutSession(session, exData)
     session.xpEarned = xp
     setSaving(false)
-    setSaved(true)
-    setTimeout(() => { setSaved(false); onSaved?.() }, 2000)
-    setExercises([])
-    setNotes('')
+    if (prs.length > 0) {
+      setNewPRs(prs)
+    } else {
+      setSaved(true)
+      setTimeout(() => { setSaved(false); onSaved?.() }, 2000)
+    }
   }
 
   if (saved) return (
@@ -59,10 +63,20 @@ export default function Workout({ user, prefill, onSaved }) {
   )
 
   const isRunning = path === 'running'
+  const isBasketball = path === 'basketball'
 
   return (
     <div style={{ padding: '24px 20px 120px', maxWidth: 480, margin: '0 auto' }}>
-      <h1 style={{ fontSize: 24, fontWeight: 800, margin: '0 0 20px', color: 'var(--text)' }}>Log Workout</h1>
+      {newPRs.length > 0 && <PRToast prs={newPRs} onDone={() => { setNewPRs([]); setSaved(true); setTimeout(() => { setSaved(false); onSaved?.() }, 2000) }} />}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, color: 'var(--text)' }}>Log Workout</h1>
+        {isBasketball && (
+          <button onClick={onOpenProgram} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 12, border: '1.5px solid var(--accent)', background: 'var(--accent-dim)', color: 'var(--accent)', fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+            <BookOpen size={14} /> Beginner Program
+          </button>
+        )}
+      </div>
 
       {/* Path Switcher */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 20, overflowX: 'auto', paddingBottom: 4 }}>
@@ -77,7 +91,7 @@ export default function Workout({ user, prefill, onSaved }) {
         ))}
       </div>
 
-      {/* Suggested for this path */}
+      {/* Quick start */}
       {!exercises.length && (
         <div style={{ marginBottom: 20 }}>
           <p style={sectionLabel}>Quick start</p>
@@ -86,7 +100,7 @@ export default function Workout({ user, prefill, onSaved }) {
               <button key={w.name} onClick={() => setExercises(w.exercises.map(n => mkExercise(n, path)))} style={{
                 padding: '10px 16px', borderRadius: 14, border: '1.5px solid var(--border)',
                 background: 'var(--card-bg)', color: 'var(--text)', cursor: 'pointer',
-                whiteSpace: 'nowrap', fontFamily: 'inherit', textAlign: 'left', minWidth: 140
+                whiteSpace: 'nowrap', fontFamily: 'inherit', textAlign: 'left', minWidth: 140, flexShrink: 0
               }}>
                 <div style={{ fontWeight: 600, fontSize: 14 }}>{w.name}</div>
                 <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{w.description}</div>
@@ -97,50 +111,55 @@ export default function Workout({ user, prefill, onSaved }) {
       )}
 
       {/* Exercise List */}
-      {exercises.map((ex, exIdx) => (
-        <div key={exIdx} style={{ background: 'var(--card-bg)', borderRadius: 18, border: '1px solid var(--border)', marginBottom: 12, overflow: 'hidden' }}>
-          <div style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
-            <span style={{ fontWeight: 700, color: 'var(--text)', flex: 1, fontSize: 15 }}>{ex.name}</span>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)', marginRight: 12, background: 'var(--bg-subtle)', padding: '2px 8px', borderRadius: 10 }}>{ex.type}</span>
-            <button onClick={() => removeExercise(exIdx)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 4 }}>
-              <Trash2 size={16} />
-            </button>
-          </div>
-
-          <div style={{ padding: '12px 16px' }}>
-            {/* Column headers */}
-            <div style={{ display: 'grid', gridTemplateColumns: isRunning ? '40px 1fr 1fr 24px' : '40px 1fr 1fr 24px', gap: 8, marginBottom: 6 }}>
-              <span style={colHead}>Set</span>
-              <span style={colHead}>{isRunning ? 'Distance (km)' : 'Reps'}</span>
-              <span style={colHead}>{isRunning ? 'Pace (min/km)' : 'Weight (kg)'}</span>
-              <span />
-            </div>
-            {ex.sets.map((set, setIdx) => (
-              <div key={setIdx} style={{ display: 'grid', gridTemplateColumns: '40px 1fr 1fr 24px', gap: 8, marginBottom: 6, alignItems: 'center' }}>
-                <span style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', fontWeight: 600 }}>{setIdx + 1}</span>
-                <input
-                  value={isRunning ? set.distance : set.reps}
-                  onChange={e => updateSet(exIdx, setIdx, isRunning ? 'distance' : 'reps', e.target.value)}
-                  placeholder={isRunning ? '5.0' : '8'} type="number" style={setInput}
-                />
-                <input
-                  value={isRunning ? set.pace : set.weight}
-                  onChange={e => updateSet(exIdx, setIdx, isRunning ? 'pace' : 'weight', e.target.value)}
-                  placeholder={isRunning ? '5:30' : '60'} style={setInput}
-                />
-                <button onClick={() => removeSet(exIdx, setIdx)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0 }}>
-                  <Trash2 size={14} />
+      {exercises.map((ex, exIdx) => {
+        const drillInfo = isBasketball ? BASKETBALL_DRILLS[ex.name] : null
+        const diffColor = { beginner: '#3effa0', intermediate: '#c8f135', advanced: '#ff8c42' }
+        return (
+          <div key={exIdx} style={{ background: 'var(--card-bg)', borderRadius: 18, border: '1px solid var(--border)', marginBottom: 12, overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+              <span style={{ fontWeight: 700, color: 'var(--text)', flex: 1, fontSize: 15 }}>{ex.name}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {drillInfo && (
+                  <button onClick={() => setSelectedDrillInfo({ name: ex.name, ...drillInfo })} style={{
+                    fontSize: 10, fontWeight: 700, color: '#000', background: diffColor[drillInfo.difficulty],
+                    padding: '3px 8px', borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: 'inherit', textTransform: 'capitalize'
+                  }}>{drillInfo.difficulty} · Guide</button>
+                )}
+                {!drillInfo && <span style={{ fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-subtle)', padding: '2px 8px', borderRadius: 10 }}>{ex.type}</span>}
+                <button onClick={() => removeExercise(exIdx)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 4 }}>
+                  <Trash2 size={16} />
                 </button>
               </div>
-            ))}
-            <button onClick={() => addSet(exIdx)} style={{ marginTop: 4, background: 'none', border: 'none', color: 'var(--accent)', fontSize: 13, fontWeight: 600, cursor: 'pointer', padding: '4px 0', fontFamily: 'inherit' }}>
-              + Add set
-            </button>
-          </div>
-        </div>
-      ))}
+            </div>
 
-      {/* Add Exercise */}
+            <div style={{ padding: '12px 16px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr 1fr 24px', gap: 8, marginBottom: 6 }}>
+                <span style={colHead}>Set</span>
+                <span style={colHead}>{isRunning ? 'Distance (km)' : 'Reps'}</span>
+                <span style={colHead}>{isRunning ? 'Pace (min/km)' : isBasketball ? 'Duration/Reps' : 'Weight (kg)'}</span>
+                <span />
+              </div>
+              {ex.sets.map((set, setIdx) => (
+                <div key={setIdx} style={{ display: 'grid', gridTemplateColumns: '40px 1fr 1fr 24px', gap: 8, marginBottom: 6, alignItems: 'center' }}>
+                  <span style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', fontWeight: 600 }}>{setIdx + 1}</span>
+                  <input value={isRunning ? set.distance : set.reps} onChange={e => updateSet(exIdx, setIdx, isRunning ? 'distance' : 'reps', e.target.value)}
+                    placeholder={isRunning ? '5.0' : isBasketball ? '—' : '8'} type={isRunning ? 'number' : 'text'} style={setInput} />
+                  <input value={isRunning ? set.pace : set.weight} onChange={e => updateSet(exIdx, setIdx, isRunning ? 'pace' : 'weight', e.target.value)}
+                    placeholder={isRunning ? '5:30' : isBasketball ? '30s' : '60'} style={setInput} />
+                  <button onClick={() => removeSet(exIdx, setIdx)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0 }}>
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+              <button onClick={() => addSet(exIdx)} style={{ marginTop: 4, background: 'none', border: 'none', color: 'var(--accent)', fontSize: 13, fontWeight: 600, cursor: 'pointer', padding: '4px 0', fontFamily: 'inherit' }}>
+                + Add set
+              </button>
+            </div>
+          </div>
+        )
+      })}
+
+      {/* Add Exercise Button */}
       <button onClick={() => setShowPicker(!showPicker)} style={{
         width: '100%', padding: '14px', borderRadius: 14, border: '1.5px dashed var(--border)',
         background: 'transparent', color: 'var(--text-muted)', fontSize: 14, fontWeight: 600,
@@ -151,36 +170,67 @@ export default function Workout({ user, prefill, onSaved }) {
 
       {showPicker && (
         <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: 18, marginTop: 8, overflow: 'hidden' }}>
-          {availableEx.map(ex => (
+          {allExercises.map(ex => (
             <button key={ex.name} onClick={() => addExercise(ex.name)} style={{
               width: '100%', padding: '12px 16px', background: 'none', border: 'none',
               borderBottom: '1px solid var(--border)', color: 'var(--text)', textAlign: 'left',
               cursor: 'pointer', fontFamily: 'inherit', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
             }}>
               <span style={{ fontWeight: 500 }}>{ex.name}</span>
-              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{ex.muscles}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {ex.userId && <span style={{ fontSize: 10, color: 'var(--accent)', fontWeight: 700 }}>CUSTOM</span>}
+                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{ex.muscles}</span>
+              </div>
             </button>
           ))}
+          <button onClick={() => { setShowPicker(false); setShowAddModal(true) }} style={{
+            width: '100%', padding: '13px 16px', background: 'none', border: 'none',
+            color: 'var(--accent)', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 700, fontSize: 14
+          }}>
+            + Create custom exercise
+          </button>
         </div>
       )}
 
-      {/* Notes */}
-      <textarea
-        value={notes} onChange={e => setNotes(e.target.value)}
-        placeholder="Session notes (optional)..."
-        style={{ width: '100%', marginTop: 16, padding: '12px 16px', borderRadius: 14, border: '1.5px solid var(--border)', background: 'var(--card-bg)', color: 'var(--text)', fontSize: 14, fontFamily: 'inherit', resize: 'vertical', minHeight: 80, boxSizing: 'border-box', outline: 'none' }}
-      />
+      <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Session notes (optional)..."
+        style={{ width: '100%', marginTop: 16, padding: '12px 16px', borderRadius: 14, border: '1.5px solid var(--border)', background: 'var(--card-bg)', color: 'var(--text)', fontSize: 14, fontFamily: 'inherit', resize: 'vertical', minHeight: 80, boxSizing: 'border-box', outline: 'none' }} />
 
-      {/* Save */}
       {exercises.length > 0 && (
         <button onClick={handleSave} disabled={saving} style={{
           width: '100%', marginTop: 16, padding: '16px', borderRadius: 16,
           background: 'var(--accent)', border: 'none', color: '#000',
-          fontSize: 16, fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit',
-          opacity: saving ? 0.7 : 1, letterSpacing: '-0.2px'
+          fontSize: 16, fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit', opacity: saving ? 0.7 : 1
         }}>
           {saving ? 'Saving...' : 'Finish & Save 💾'}
         </button>
+      )}
+
+      {showAddModal && <AddExerciseModal userId={user.id} onSaved={() => getCustomExercises(user.id).then(setCustomExercises)} onClose={() => setShowAddModal(false)} />}
+
+      {/* Drill guide inline modal */}
+      {selectedDrillInfo && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 300, display: 'flex', alignItems: 'flex-end' }} onClick={() => setSelectedDrillInfo(null)}>
+          <div style={{ background: 'var(--card-bg)', borderRadius: '24px 24px 0 0', padding: '24px 20px 48px', width: '100%', maxWidth: 480, margin: '0 auto', maxHeight: '80vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+            <h2 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 800, color: 'var(--text)' }}>{selectedDrillInfo.name}</h2>
+            <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6 }}>{selectedDrillInfo.description}</p>
+            <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', margin: '0 0 8px' }}>How to do it</p>
+            {selectedDrillInfo.instructions.map((step, i) => (
+              <div key={i} style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+                <span style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--accent)', color: '#000', fontWeight: 800, fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>{i+1}</span>
+                <p style={{ margin: 0, fontSize: 14, color: 'var(--text)', lineHeight: 1.6 }}>{step}</p>
+              </div>
+            ))}
+            <div style={{ background: 'var(--bg-subtle)', borderRadius: 12, padding: '12px 14px', marginTop: 12 }}>
+              <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: 'var(--accent)' }}>{selectedDrillInfo.setsReps}</p>
+            </div>
+            {selectedDrillInfo.beginner && (
+              <div style={{ background: 'rgba(62,255,160,0.08)', border: '1px solid rgba(62,255,160,0.2)', borderRadius: 12, padding: '12px 14px', marginTop: 10 }}>
+                <p style={{ margin: '0 0 4px', fontSize: 11, fontWeight: 700, color: '#3effa0', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Beginner tip</p>
+                <p style={{ margin: 0, fontSize: 13, color: 'var(--text)', lineHeight: 1.6 }}>{selectedDrillInfo.beginner}</p>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   )

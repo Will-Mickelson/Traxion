@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { db, getRecentSessions, getUserStats, SUGGESTED_WORKOUTS } from '../db'
+import { getUserStats, getRecentSessions, getSuggestedWorkout } from '../db'
 import { Zap, Flame, Target, ChevronRight } from 'lucide-react'
 
 export default function Home({ user, onStartWorkout }) {
@@ -11,11 +11,9 @@ export default function Home({ user, onStartWorkout }) {
     if (!user) return
     getUserStats(user.id).then(setStats)
     getRecentSessions(user.id, 5).then(setRecent)
-    // Pick today's suggested workout
     const paths = user.activePaths || ['gym']
     const path = paths[new Date().getDay() % paths.length]
-    const options = SUGGESTED_WORKOUTS[path] || SUGGESTED_WORKOUTS.gym
-    setSuggested({ path, ...options[new Date().getDate() % options.length] })
+    getSuggestedWorkout(user.id, path).then(setSuggested)
   }, [user])
 
   if (!user) return null
@@ -23,22 +21,15 @@ export default function Home({ user, onStartWorkout }) {
   const xpToNext = 1000 - (user.totalXP % 1000)
   const level = Math.floor((user.totalXP || 0) / 1000) + 1
   const xpPercent = ((user.totalXP || 0) % 1000) / 10
-
   const pathEmoji = { gym: '🏋️', basketball: '🏀', running: '🏃' }
 
   return (
-    <div style={pg}>
-      {/* Header */}
+    <div style={{ padding: '24px 20px 100px', maxWidth: 480, margin: '0 auto' }}>
       <div style={{ marginBottom: 24 }}>
-        <p style={{ color: 'var(--text-muted)', fontSize: 14, margin: '0 0 4px' }}>
-          {greeting()}, {user.name?.split(' ')[0]} 👊
-        </p>
-        <h1 style={{ fontSize: 26, fontWeight: 800, margin: 0, color: 'var(--text)', letterSpacing: '-0.5px' }}>
-          Ready to level up?
-        </h1>
+        <p style={{ color: 'var(--text-muted)', fontSize: 14, margin: '0 0 4px' }}>{greeting()}, {user.name?.split(' ')[0]} 👊</p>
+        <h1 style={{ fontSize: 26, fontWeight: 800, margin: 0, color: 'var(--text)', letterSpacing: '-0.5px' }}>Ready to level up?</h1>
       </div>
 
-      {/* XP Bar */}
       <div style={card}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -57,7 +48,6 @@ export default function Home({ user, onStartWorkout }) {
         </div>
       </div>
 
-      {/* Today's Suggested Workout */}
       {suggested && (
         <div style={{ marginBottom: 20 }}>
           <p style={sectionLabel}>Today's suggested workout</p>
@@ -69,9 +59,7 @@ export default function Home({ user, onStartWorkout }) {
               </div>
               <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 13 }}>{suggested.description}</p>
               <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
-                {suggested.exercises.map(e => (
-                  <span key={e} style={pill}>{e}</span>
-                ))}
+                {suggested.exercises.map(e => <span key={e} style={pill}>{e}</span>)}
               </div>
             </div>
             <ChevronRight size={20} color="var(--accent)" style={{ flexShrink: 0 }} />
@@ -79,7 +67,6 @@ export default function Home({ user, onStartWorkout }) {
         </div>
       )}
 
-      {/* Recent Sessions */}
       {recent.length > 0 && (
         <div>
           <p style={sectionLabel}>Recent sessions</p>
@@ -132,7 +119,6 @@ function fmtDate(d) {
   return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-const pg = { padding: '24px 20px 100px', maxWidth: 480, margin: '0 auto' }
 const card = { background: 'var(--card-bg)', borderRadius: 18, padding: '16px 18px', marginBottom: 16, border: '1px solid var(--border)', display: 'block' }
 const sectionLabel = { fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', margin: '0 0 10px' }
 const pill = { background: 'var(--bg-subtle)', color: 'var(--text-muted)', fontSize: 11, padding: '4px 10px', borderRadius: 20, fontWeight: 500 }
