@@ -1,0 +1,35 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700;0,9..40,800;1,9..40,400&display=swap');
+
+:root {
+  --bg: #0a0a0a;
+  --bg-nav: rgba(10,10,10,0.92);
+  --bg-subtle: #161616;
+  --card-bg: #111111;
+  --border: #222222;
+  --text: #f0f0f0;
+  --text-muted: #666;
+  --accent: #c8f135;
+  --accent-dim: rgba(200,241,53,0.1);
+  --success: #3effa0;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0; padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--accent) !important;
+}
+
+input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+button:active { transform: scale(0.97); }
+
+::-webkit-scrollbar { display: none; }
